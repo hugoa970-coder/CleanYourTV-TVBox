@@ -32,4 +32,8 @@
     <string name="on">Sí</string>
     <string name="off">No</string>
     <string name="enable">Activar</string>
+    <string name="category_streaming">Películas y Series</string>
+    <string name="category_games">Juegos y Emuladores</string>
+    <string name="category_tools">Herramientas y Navegación</string>
+    <string name="category_system">Sistema</string>
 </resources>

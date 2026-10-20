@@ -37,6 +37,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -44,7 +45,7 @@ import java.util.Set;
  * App tiles. The first {@link MainActivity#COLUMNS} positions are the pinned dock (favourites, fixed order),
  * then the module cards the owner chose to show (by label), the rest is alphabetical.
  */
-public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
+public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     interface TileListener {
         void onTileFocused(int position, View card);
@@ -54,7 +55,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
     }
 
     static final class Entry {
-        static final int APP = 0, HOME_SETTINGS = 1, CARD = 2;
+        static final int APP = 0, HOME_SETTINGS = 1, CARD = 2, HEADER = 3;
 
         final int kind;
         final String label;
@@ -67,6 +68,10 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         final boolean isLeanback;
         /** Ambient glow colour; 0 until sampled from the banner, or the card's accent from the start. */
         int ambient;
+
+        static Entry header(String title) {
+            return new Entry(HEADER, title, null, null, null, null, 0, false);
+        }
 
         Entry(String label, ComponentName component, Drawable banner, Drawable icon) {
             this(APP, label, component, banner, icon, null, 0, true);
@@ -84,12 +89,20 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
             this.kind = kind;
             this.label = label;
             this.component = component;
-            this.pkg = component.getPackageName();
+            this.pkg = component != null ? component.getPackageName() : "";
             this.banner = banner;
             this.icon = icon;
             this.name = caption == null ? label : label + " \u00B7 " + caption;
             this.ambient = accent;
             this.isLeanback = isLeanback;
+        }
+    }
+
+    static final class HeaderHolder extends RecyclerView.ViewHolder {
+        final TextView title;
+        HeaderHolder(View v) {
+            super(v);
+            title = v.findViewById(R.id.headerTitle);
         }
     }
 
@@ -191,28 +204,108 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
             Drawable icon = ri.loadIcon(pm);
             fresh.add(new Entry(Cards.cleanLabel(String.valueOf(ri.loadLabel(pm)), pkg), component, banner, icon, false));
         }
-        Collections.sort(fresh, (a, b) -> {
-            int fa = favourites.indexOf(a.pkg), fb = favourites.indexOf(b.pkg);
-            if (fa >= 0 || fb >= 0) {
-                if (fa < 0) return 1;
-                if (fb < 0) return -1;
-                return Integer.compare(fa, fb);
+        // Group into Dock Favorites and categorized rows
+        List<Entry> dockList = new ArrayList<>();
+        List<Entry> remaining = new ArrayList<>();
+        Set<String> dockPkgs = new HashSet<>(favourites);
+        for (Entry e : fresh) {
+            if (dockPkgs.contains(e.pkg)) {
+                dockList.add(e);
+            } else {
+                remaining.add(e);
             }
-            // Cards come right after the configured dock apps, before the alphabetical grid.
-            boolean ca = a.kind == Entry.CARD, cb = b.kind == Entry.CARD;
-            if (ca != cb) return ca ? -1 : 1;
-            return a.label.compareToIgnoreCase(b.label);
+        }
+        Collections.sort(dockList, (a, b) -> {
+            int fa = favourites.indexOf(a.pkg), fb = favourites.indexOf(b.pkg);
+            return Integer.compare(fa, fb);
         });
-        // Retain the optional Default-home tile until dependent tile-ordering work is merged.
+
+        List<Entry> streaming = new ArrayList<>();
+        List<Entry> games = new ArrayList<>();
+        List<Entry> tools = new ArrayList<>();
+        List<Entry> system = new ArrayList<>();
+
+        for (Entry e : remaining) {
+            int cat = detectCategory(e.pkg, e.label);
+            if (cat == 1) streaming.add(e);
+            else if (cat == 2) games.add(e);
+            else if (cat == 3) tools.add(e);
+            else system.add(e);
+        }
+
+        Collections.sort(streaming, (a, b) -> a.label.compareToIgnoreCase(b.label));
+        Collections.sort(games, (a, b) -> a.label.compareToIgnoreCase(b.label));
+        Collections.sort(tools, (a, b) -> a.label.compareToIgnoreCase(b.label));
+        Collections.sort(system, (a, b) -> a.label.compareToIgnoreCase(b.label));
+
+        List<Entry> organized = new ArrayList<>(dockList);
+        if (!streaming.isEmpty()) {
+            organized.add(Entry.header(ctx.getString(R.string.category_streaming)));
+            organized.addAll(streaming);
+        }
+        if (!games.isEmpty()) {
+            organized.add(Entry.header(ctx.getString(R.string.category_games)));
+            organized.addAll(games);
+        }
+        if (!tools.isEmpty()) {
+            organized.add(Entry.header(ctx.getString(R.string.category_tools)));
+            organized.addAll(tools);
+        }
+        if (!system.isEmpty()) {
+            organized.add(Entry.header(ctx.getString(R.string.category_system)));
+            organized.addAll(system);
+        }
         if (showHomeSettings
                 && pm.resolveActivity(new Intent(Settings.ACTION_HOME_SETTINGS), 0) != null) {
-            fresh.add(new Entry(Entry.HOME_SETTINGS, ctx.getString(R.string.home_settings),
+            organized.add(new Entry(Entry.HOME_SETTINGS, ctx.getString(R.string.home_settings),
                     new ComponentName(ctx, HomeSettingsActivity.class), null,
                     ctx.getDrawable(R.drawable.ic_home_settings), null, 0));
         }
         items.clear();
-        items.addAll(fresh);
+        items.addAll(organized);
         notifyDataSetChanged();
+    }
+
+    static int detectCategory(String pkg, String label) {
+        String p = (pkg + " " + label).toLowerCase(Locale.ROOT);
+        // 1. Streaming & Cine
+        if (p.contains("netflix") || p.contains("youtube") || p.contains("prime") || p.contains("amazon")
+                || p.contains("kodi") || p.contains("film") || p.contains("pollito") || p.contains("latino")
+                || p.contains("iptv") || p.contains("magis") || p.contains("stremio") || p.contains("vlc")
+                || p.contains("player") || p.contains("tv") || p.contains("video") || p.contains("cinema")
+                || p.contains("movie") || p.contains("disney") || p.contains("max") || p.contains("hbo")
+                || p.contains("star") || p.contains("directv") || p.contains("plex") || p.contains("pluto")
+                || p.contains("crunchyroll") || p.contains("twitch")) {
+            return 1;
+        }
+        // 2. Juegos y Emuladores
+        if (p.contains("mupen") || p.contains("epsxe") || p.contains("gba") || p.contains("n64")
+                || p.contains("snes") || p.contains("nes") || p.contains("retroarch") || p.contains("emulator")
+                || p.contains("emu") || p.contains("game") || p.contains("juego") || p.contains("monopoly")
+                || p.contains("playstation") || p.contains("psp") || p.contains("arcade") || p.contains("mame")
+                || p.contains("fastemulator")) {
+            return 2;
+        }
+        // 3. Herramientas y Navegación
+        if (p.contains("downloader") || p.contains("zarchiver") || p.contains("estrongs") || p.contains("file")
+                || p.contains("archiver") || p.contains("aptoide") || p.contains("airscreen") || p.contains("cast")
+                || p.contains("browser") || p.contains("chrome") || p.contains("sbrowser") || p.contains("navegador")
+                || p.contains("telegram") || p.contains("speedtest") || p.contains("cleaner") || p.contains("remote")
+                || p.contains("drive") || p.contains("happymod") || p.contains("bluetooth") || p.contains("poison")
+                || p.contains("kingred") || p.contains("netxxus") || p.contains("titan")) {
+            return 3;
+        }
+        // 4. Sistema
+        return 4;
+    }
+
+    public boolean isHeader(int position) {
+        return position >= 0 && position < items.size() && items.get(position).kind == Entry.HEADER;
+    }
+
+    @Override
+    public int getItemViewType(int position) {
+        return isHeader(position) ? Entry.HEADER : Entry.APP;
     }
 
     private Drawable loadBanner(PackageManager pm, ResolveInfo ri) {
@@ -232,7 +325,11 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
 
     @NonNull
     @Override
-    public Holder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+    public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+        if (viewType == Entry.HEADER) {
+            View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_section_header, parent, false);
+            return new HeaderHolder(v);
+        }
         View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_app, parent, false);
         float density = parent.getResources().getDisplayMetrics().density;
         int width = parent.getWidth() > 0 ? parent.getWidth() : parent.getMeasuredWidth();
@@ -252,8 +349,14 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
     }
 
     @Override
-    public void onBindViewHolder(@NonNull Holder h, int position) {
+    public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) {
         Entry e = items.get(position);
+        if (e.kind == Entry.HEADER) {
+            HeaderHolder hh = (HeaderHolder) holder;
+            hh.title.setText(e.label);
+            return;
+        }
+        Holder h = (Holder) holder;
         h.name.setText(e.name);
         h.name.setVisibility(position < dockSize ? View.INVISIBLE : View.VISIBLE);   // the dock has no labels
         boolean focused = h.card.isFocused();   // a rebind after reload() can hit the focused tile
@@ -336,19 +439,24 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
 
     @Override
     public long getItemId(int position) {
-        return items.get(position).component.flattenToShortString().hashCode();
+        Entry e = items.get(position);
+        if (e.component != null) return e.component.flattenToShortString().hashCode();
+        return ("header:" + e.label).hashCode();
     }
 
     /** Stable key for the app at a position (its component), or null. */
     String keyAt(int position) {
-        return position >= 0 && position < items.size() ? items.get(position).component.flattenToShortString() : null;
+        if (position < 0 || position >= items.size()) return null;
+        Entry e = items.get(position);
+        return e.component != null ? e.component.flattenToShortString() : null;
     }
 
     /** Position of the app with this key, or -1 when it is gone. */
     int positionOf(String key) {
         if (key == null) return -1;
         for (int i = 0; i < items.size(); i++) {
-            if (items.get(i).component.flattenToShortString().equals(key)) return i;
+            Entry e = items.get(i);
+            if (e.component != null && e.component.flattenToShortString().equals(key)) return i;
         }
         return -1;
     }
@@ -365,6 +473,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
     int ambientColorAt(int position) {
         if (position < 0 || position >= items.size()) return 0xFF444444;
         Entry e = items.get(position);
+        if (e.kind == Entry.HEADER) return 0xFF444444;
         if (e.ambient == 0) e.ambient = vividColor(e.banner != null ? e.banner : e.icon);
         return e.ambient;
     }

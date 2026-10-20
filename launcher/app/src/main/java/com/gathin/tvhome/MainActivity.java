@@ -236,12 +236,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         grid = findViewById(R.id.grid);
         rtlAppGrid = getResources().getBoolean(R.bool.rtl_app_grid);
         // Mirror only the app grid; the header and other locales keep their own layouts.
-        grid.setLayoutManager(new GridLayoutManager(this, COLUMNS) {
+        GridLayoutManager glm = new GridLayoutManager(this, COLUMNS) {
             @Override
             protected boolean isLayoutRTL() {
                 return rtlAppGrid;
             }
+        };
+        glm.setSpanSizeLookup(new GridLayoutManager.SpanSizeLookup() {
+            @Override
+            public int getSpanSize(int position) {
+                return (adapter != null && adapter.isHeader(position)) ? COLUMNS : 1;
+            }
         });
+        grid.setLayoutManager(glm);
         grid.setHasFixedSize(true);
         grid.setItemAnimator(null);
         grid.addItemDecoration(new DockDecoration(COLUMNS, density));
@@ -753,23 +760,92 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     public boolean onTileVerticalKey(int position, int keyCode) {
         int count = adapter.getItemCount();
-        int target;
-        // Horizontal: swallow the key at a row's ends so focus never wraps to the next row or
-        // escapes up into the top bar. Mid-row moves fall through to the default focus search.
         if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
-            return GridNavigation.atHorizontalEdge(position, count, COLUMNS,
-                    rtlAppGrid, keyCode == KeyEvent.KEYCODE_DPAD_LEFT);
+            RecyclerView.LayoutManager lm = grid.getLayoutManager();
+            if (lm instanceof GridLayoutManager) {
+                GridLayoutManager glm = (GridLayoutManager) lm;
+                int col = glm.getSpanSizeLookup().getSpanIndex(position, COLUMNS);
+                int group = glm.getSpanSizeLookup().getSpanGroupIndex(position, COLUMNS);
+                if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                    if (col == 0) return true;
+                } else {
+                    if (col == COLUMNS - 1 || position == count - 1 || adapter.isHeader(position + 1)
+                            || glm.getSpanSizeLookup().getSpanGroupIndex(position + 1, COLUMNS) != group) {
+                        return true;
+                    }
+                }
+            }
+            return false;
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
             if (position < COLUMNS) return false;          // dock row: let focus move to the top bar
-            target = position - COLUMNS;
+            int target = findPrevFocusable(position);
+            if (target >= 0) {
+                focusTile(target);
+                return true;
+            }
+            return false;
         } else {
-            int lastRowStart = ((count - 1) / COLUMNS) * COLUMNS;
-            if (position >= lastRowStart) return true;     // already on the last row: stay put
-            target = Math.min(position + COLUMNS, count - 1);
+            int target = findNextFocusable(position);
+            if (target >= 0 && target != position) {
+                focusTile(target);
+                return true;
+            }
+            return true;
         }
-        focusTile(target);
-        return true;
+    }
+
+    private int findPrevFocusable(int fromPos) {
+        if (fromPos <= 0) return -1;
+        RecyclerView.LayoutManager lm = grid.getLayoutManager();
+        if (!(lm instanceof GridLayoutManager)) return fromPos - COLUMNS;
+        GridLayoutManager glm = (GridLayoutManager) lm;
+        int col = glm.getSpanSizeLookup().getSpanIndex(fromPos, COLUMNS);
+        int curGroup = glm.getSpanSizeLookup().getSpanGroupIndex(fromPos, COLUMNS);
+        int targetGroup = -1;
+        int best = -1;
+        int bestDiff = Integer.MAX_VALUE;
+        for (int p = fromPos - 1; p >= 0; p--) {
+            if (adapter.isHeader(p)) continue;
+            int group = glm.getSpanSizeLookup().getSpanGroupIndex(p, COLUMNS);
+            if (group == curGroup) continue;
+            if (targetGroup == -1) targetGroup = group;
+            if (group != targetGroup) break;
+            int c = glm.getSpanSizeLookup().getSpanIndex(p, COLUMNS);
+            int diff = Math.abs(c - col);
+            if (diff < bestDiff) {
+                bestDiff = diff;
+                best = p;
+            }
+        }
+        return best;
+    }
+
+    private int findNextFocusable(int fromPos) {
+        int count = adapter.getItemCount();
+        if (fromPos >= count - 1) return fromPos;
+        RecyclerView.LayoutManager lm = grid.getLayoutManager();
+        if (!(lm instanceof GridLayoutManager)) return Math.min(fromPos + COLUMNS, count - 1);
+        GridLayoutManager glm = (GridLayoutManager) lm;
+        int col = glm.getSpanSizeLookup().getSpanIndex(fromPos, COLUMNS);
+        int curGroup = glm.getSpanSizeLookup().getSpanGroupIndex(fromPos, COLUMNS);
+        int targetGroup = -1;
+        int best = -1;
+        int bestDiff = Integer.MAX_VALUE;
+        for (int p = fromPos + 1; p < count; p++) {
+            if (adapter.isHeader(p)) continue;
+            int group = glm.getSpanSizeLookup().getSpanGroupIndex(p, COLUMNS);
+            if (group == curGroup) continue;
+            if (targetGroup == -1) targetGroup = group;
+            if (group != targetGroup) break;
+            int c = glm.getSpanSizeLookup().getSpanIndex(p, COLUMNS);
+            int diff = Math.abs(c - col);
+            if (diff < bestDiff) {
+                bestDiff = diff;
+                best = p;
+            }
+        }
+        return best >= 0 ? best : fromPos;
     }
 
     private void focusTile(int position) {
