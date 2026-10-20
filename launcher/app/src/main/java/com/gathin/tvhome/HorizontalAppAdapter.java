@@ -12,7 +12,6 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
 import android.view.animation.DecelerateInterpolator;
-import android.view.animation.OvershootInterpolator;
 import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -20,24 +19,27 @@ import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public class HorizontalAppAdapter extends RecyclerView.Adapter<HorizontalAppAdapter.AppHolder> {
 
     private final Context ctx;
-    private final List<AppAdapter.Entry> apps;
-    private final int row;
+    private final List<AppAdapter.Entry> apps = new ArrayList<>();
+    private int row;
     private final AppAdapter.TileListener listener;
     private final boolean animations;
     private final boolean advancedEffects;
     private final boolean reducedMotion;
     private final float density;
 
-    public HorizontalAppAdapter(Context ctx, List<AppAdapter.Entry> apps, int row,
+    public HorizontalAppAdapter(Context ctx, List<AppAdapter.Entry> initialApps, int row,
                                 AppAdapter.TileListener listener,
                                 boolean animations, boolean advancedEffects, boolean reducedMotion) {
         this.ctx = ctx;
-        this.apps = apps;
+        if (initialApps != null) {
+            this.apps.addAll(initialApps);
+        }
         this.row = row;
         this.listener = listener;
         this.animations = animations;
@@ -47,8 +49,18 @@ public class HorizontalAppAdapter extends RecyclerView.Adapter<HorizontalAppAdap
         setHasStableIds(true);
     }
 
+    public void setApps(List<AppAdapter.Entry> newApps, int newRow) {
+        this.apps.clear();
+        if (newApps != null) {
+            this.apps.addAll(newApps);
+        }
+        this.row = newRow;
+        notifyDataSetChanged();
+    }
+
     @Override
     public long getItemId(int position) {
+        if (position < 0 || position >= apps.size()) return RecyclerView.NO_ID;
         AppAdapter.Entry e = apps.get(position);
         if (e.component != null) {
             return e.component.flattenToShortString().hashCode();
@@ -77,7 +89,7 @@ public class HorizontalAppAdapter extends RecyclerView.Adapter<HorizontalAppAdap
         h.name.setAlpha(focused ? 1f : 0f);
         h.card.setScaleX(focused && animations ? AppAdapter.FOCUS_SCALE : 1f);
         h.card.setScaleY(focused && animations ? AppAdapter.FOCUS_SCALE : 1f);
-        h.card.setTranslationZ(focused && advancedEffects ? 8f * density : 0f);
+        h.card.setTranslationZ(focused ? 4f * density : 0f);
 
         if (e.banner != null) {
             h.banner.setImageDrawable(e.banner);
@@ -116,39 +128,29 @@ public class HorizontalAppAdapter extends RecyclerView.Adapter<HorizontalAppAdap
 
         h.card.setOnFocusChangeListener((view, isFocused) -> {
             view.animate().cancel();
-            h.banner.animate().cancel();
             h.name.animate().cancel();
 
-            float scale = !animations ? 1f : (advancedEffects ? 1.12f : AppAdapter.FOCUS_SCALE);
-            float s = isFocused ? scale : 1f;
+            float s = isFocused ? AppAdapter.FOCUS_SCALE : 1f;
 
             if (!animations) {
                 view.setScaleX(s);
                 view.setScaleY(s);
                 view.setTranslationZ(0f);
-                h.banner.setScaleX(1f);
-                h.banner.setScaleY(1f);
                 h.name.setAlpha(isFocused ? 1f : 0f);
-            } else if (reducedMotion) {
-                view.animate().scaleX(s).scaleY(s)
-                        .translationZ(isFocused && advancedEffects ? 8f * density : 0f)
-                        .setDuration(isFocused ? 120 : 80)
-                        .setInterpolator(new DecelerateInterpolator())
-                        .withLayer().start();
-                h.name.animate().alpha(isFocused ? 1f : 0f).setDuration(100).start();
             } else {
-                view.animate().scaleX(s).scaleY(s)
-                        .translationZ(isFocused && advancedEffects ? 8f * density : 0f)
-                        .setDuration(advancedEffects ? (isFocused ? 220 : 170) : (isFocused ? 260 : 180))
-                        .setInterpolator(new OvershootInterpolator(isFocused ? (advancedEffects ? 0.7f : 1.4f) : 0f))
-                        .withLayer().start();
-                if (advancedEffects) {
-                    h.banner.animate().scaleX(isFocused ? 1.035f : 1f).scaleY(isFocused ? 1.035f : 1f)
-                            .setDuration(280).start();
-                }
-                h.name.animate().alpha(isFocused ? 1f : 0f)
-                        .translationY(isFocused ? density * 2f : -density * 4f)
-                        .setDuration(220).start();
+                // Ultra-snappy 90ms response for maximum remote control fluidity
+                view.animate()
+                        .scaleX(s)
+                        .scaleY(s)
+                        .translationZ(isFocused ? 4f * density : 0f)
+                        .setDuration(isFocused ? 90 : 70)
+                        .setInterpolator(new DecelerateInterpolator())
+                        .withLayer()
+                        .start();
+                h.name.animate()
+                        .alpha(isFocused ? 1f : 0f)
+                        .setDuration(isFocused ? 90 : 70)
+                        .start();
             }
 
             int pos = h.getBindingAdapterPosition();

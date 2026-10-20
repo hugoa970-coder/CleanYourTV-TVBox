@@ -236,8 +236,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
         grid = findViewById(R.id.grid);
         LinearLayoutManager vlm = new LinearLayoutManager(this, LinearLayoutManager.VERTICAL, false);
+        vlm.setInitialPrefetchItemCount(4);
         grid.setLayoutManager(vlm);
         grid.setHasFixedSize(true);
+        grid.setItemViewCacheSize(6);
         grid.setItemAnimator(null);
         adapter = new AppAdapter(this, this, COLUMNS, cfg);
         grid.setAdapter(adapter);
@@ -267,15 +269,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }
         });
         for (SpringAnimation s : new SpringAnimation[]{springX, springY}) {
-            if (reducedMotion) {
-                // Stiff and almost critically damped: settles in a few frames instead of oscillating,
-                // and stops once the highlight is within 1.5 px of its tile.
-                s.setSpring(new SpringForce().setStiffness(1400f).setDampingRatio(0.95f));
-                s.setMinimumVisibleChange(1.5f);
-            } else {
-                s.setSpring(new SpringForce().setStiffness(advancedEffects ? 320f : 260f)
-                        .setDampingRatio(advancedEffects ? 0.76f : 0.58f));
-            }
+            // Ultra-responsive spring: locks onto card in ~70ms with silky, immediate feedback
+            s.setSpring(new SpringForce().setStiffness(1200f).setDampingRatio(0.88f));
+            s.setMinimumVisibleChange(1.0f);
         }
 
         btnInputs = findViewById(R.id.btnInputs);
@@ -565,16 +561,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (color != 0) {
             setAmbient(color);
             if (!heroShown) {
-                ambient.setAlpha(0f);
-                ambient.animate().alpha(1f).setDuration(600).start();
+                ambient.setAlpha(1f);
                 heroShown = true;
             }
         }
 
-        View item = (View) card.getParent();
-        if (item != null) {
-            Rect want = new Rect(0, -(int) pad * 2, item.getWidth(), item.getHeight() + (int) pad);
-            grid.requestChildRectangleOnScreen(item, want, reducedMotion);
+        RecyclerView.ViewHolder rowVh = grid.findViewHolderForAdapterPosition(row);
+        if (rowVh != null) {
+            Rect want = new Rect(0, -(int) pad * 2, rowVh.itemView.getWidth(), rowVh.itemView.getHeight() + (int) pad);
+            grid.requestChildRectangleOnScreen(rowVh.itemView, want, true);
         }
     }
 

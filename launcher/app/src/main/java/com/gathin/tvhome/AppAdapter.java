@@ -127,7 +127,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.CategoryHolder> 
     @Override
     public CategoryHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
         View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_category_row, parent, false);
-        return new CategoryHolder(v);
+        return new CategoryHolder(v, ctx, sharedPool, listener);
     }
 
     @Override
@@ -135,23 +135,13 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.CategoryHolder> 
         Category cat = categories.get(position);
         holder.title.setText(cat.title);
 
-        LinearLayoutManager lm = new LinearLayoutManager(ctx, LinearLayoutManager.HORIZONTAL, false);
-        holder.recycler.setLayoutManager(lm);
-        holder.recycler.setRecycledViewPool(sharedPool);
-        holder.recycler.setHasFixedSize(true);
-        HorizontalAppAdapter appAdapter = new HorizontalAppAdapter(ctx, cat.apps, position, listener,
-                animations, advancedEffects, reducedMotion);
-        holder.recycler.setAdapter(appAdapter);
-
-        holder.recycler.clearOnScrollListeners();
-        holder.recycler.addOnScrollListener(new RecyclerView.OnScrollListener() {
-            @Override
-            public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
-                if (listener != null) {
-                    listener.onRowScrolled(dx);
-                }
-            }
-        });
+        if (holder.appAdapter == null) {
+            holder.appAdapter = new HorizontalAppAdapter(ctx, cat.apps, position, listener,
+                    animations, advancedEffects, reducedMotion);
+            holder.recycler.setAdapter(holder.appAdapter);
+        } else {
+            holder.appAdapter.setApps(cat.apps, position);
+        }
     }
 
     public float focusScale() {
@@ -236,6 +226,13 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.CategoryHolder> 
             Drawable banner = loadBanner(pm, ri);
             Drawable icon = ri.loadIcon(pm);
             fresh.add(new Entry(Cards.cleanLabel(String.valueOf(ri.loadLabel(pm)), pkg), component, banner, icon, false));
+        }
+
+        // Pre-sample ambient colors so remote navigation has zero lag
+        for (Entry e : fresh) {
+            if (e.banner != null && e.ambient == 0) {
+                e.ambient = sampleBannerColor(e.banner);
+            }
         }
 
         // 1. Group Dock Favorites
@@ -390,11 +387,29 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.CategoryHolder> 
     public static final class CategoryHolder extends RecyclerView.ViewHolder {
         public final TextView title;
         public final RecyclerView recycler;
+        public final LinearLayoutManager layoutManager;
+        public HorizontalAppAdapter appAdapter;
 
-        public CategoryHolder(View v) {
+        public CategoryHolder(View v, Context ctx, RecyclerView.RecycledViewPool sharedPool,
+                              TileListener listener) {
             super(v);
             title = v.findViewById(R.id.categoryTitle);
             recycler = v.findViewById(R.id.categoryRecycler);
+            layoutManager = new LinearLayoutManager(ctx, LinearLayoutManager.HORIZONTAL, false);
+            layoutManager.setInitialPrefetchItemCount(6);
+            recycler.setLayoutManager(layoutManager);
+            recycler.setRecycledViewPool(sharedPool);
+            recycler.setHasFixedSize(true);
+            recycler.setItemViewCacheSize(8);
+            recycler.setItemAnimator(null);
+            recycler.addOnScrollListener(new RecyclerView.OnScrollListener() {
+                @Override
+                public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
+                    if (listener != null) {
+                        listener.onRowScrolled(dx);
+                    }
+                }
+            });
         }
     }
 }
