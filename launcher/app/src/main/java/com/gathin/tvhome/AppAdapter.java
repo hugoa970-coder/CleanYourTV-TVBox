@@ -1,7 +1,5 @@
 package com.gathin.tvhome;
 
-import android.app.Activity;
-import android.content.ActivityNotFoundException;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -11,28 +9,20 @@ import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.Outline;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
-import android.net.Uri;
 import android.provider.Settings;
 import android.util.DisplayMetrics;
-import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.ViewOutlineProvider;
-import android.view.animation.DecelerateInterpolator;
-import android.view.animation.OvershootInterpolator;
-import android.widget.ImageView;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import androidx.annotation.NonNull;
+import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -41,21 +31,16 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
-/**
- * App tiles. The first {@link MainActivity#COLUMNS} positions are the pinned dock (favourites, fixed order),
- * then the module cards the owner chose to show (by label), the rest is alphabetical.
- */
-public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+public class AppAdapter extends RecyclerView.Adapter<AppAdapter.CategoryHolder> {
 
-    interface TileListener {
-        void onTileFocused(int position, View card);
-
-        /** Called for a D-pad direction key on a tile. Return true when handled (focus stays put). */
-        boolean onTileVerticalKey(int position, int keyCode);
+    public interface TileListener {
+        void onTileFocused(Entry entry, View card, int row, int col);
+        void onRowScrolled(int dx);
+        boolean onTopEdgeReached();
     }
 
-    static final class Entry {
-        static final int APP = 0, HOME_SETTINGS = 1, CARD = 2, HEADER = 3;
+    public static final class Entry {
+        static final int APP = 0, HOME_SETTINGS = 1, CARD = 2;
 
         final int kind;
         final String label;
@@ -63,26 +48,12 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         final String pkg;
         final Drawable banner;
         final Drawable icon;
-        /** Text under the tile when it is focused in the grid: the label, plus the caption for a card. */
         final String name;
         final boolean isLeanback;
-        /** Ambient glow colour; 0 until sampled from the banner, or the card's accent from the start. */
         int ambient;
-
-        static Entry header(String title) {
-            return new Entry(HEADER, title, null, null, null, null, 0, false);
-        }
-
-        Entry(String label, ComponentName component, Drawable banner, Drawable icon) {
-            this(APP, label, component, banner, icon, null, 0, true);
-        }
 
         Entry(String label, ComponentName component, Drawable banner, Drawable icon, boolean isLeanback) {
             this(APP, label, component, banner, icon, null, 0, isLeanback);
-        }
-
-        Entry(int kind, String label, ComponentName component, Drawable banner, Drawable icon, String caption, int accent) {
-            this(kind, label, component, banner, icon, caption, accent, true);
         }
 
         Entry(int kind, String label, ComponentName component, Drawable banner, Drawable icon, String caption, int accent, boolean isLeanback) {
@@ -98,54 +69,38 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
     }
 
-    static final class HeaderHolder extends RecyclerView.ViewHolder {
-        final TextView title;
-        HeaderHolder(View v) {
-            super(v);
-            title = v.findViewById(R.id.headerTitle);
+    public static final class Category {
+        public final String id;
+        public final String title;
+        public final List<Entry> apps;
+
+        public Category(String id, String title, List<Entry> apps) {
+            this.id = id;
+            this.title = title;
+            this.apps = apps;
         }
     }
 
     static final float FOCUS_SCALE = 1.10f;
-    /** Design size of a tile (dp); tiles shrink from here when the columns don't fit, see tileWidthPx. */
-    static final float DESIGN_W_DP = 180f, DESIGN_H_DP = 101f;
+    static final float DESIGN_W_DP = 186f;
 
-    /**
-     * Tile width for a grid of this inner width: the cell minus room for the focus zoom and the glass
-     * highlight, capped at the design size so 4 columns on a 1080p TV look exactly as before.
-     */
-    static int tileWidthPx(int innerWidthPx, int columns, float density) {
-        int design = Math.round(DESIGN_W_DP * density);
-        if (innerWidthPx <= 0 || columns <= 0) return design;
-        int cell = innerWidthPx / columns;
-        int fit = (int) ((cell - 12 * density) / FOCUS_SCALE);
-        return Math.max(Math.round(80 * density), Math.min(design, fit));
-    }
-
-    static int tileHeightPx(int tileWidthPx) {
-        return Math.round(tileWidthPx * DESIGN_H_DP / DESIGN_W_DP);
-    }
-
-    /** Height of one grid item: the tile, the name label under it and the item's own padding. */
-    static int itemHeightPx(int tileHeightPx, float density) {
-        return tileHeightPx + Math.round(45 * density);
+    static float cornerRadius(int tileWidthPx, float density) {
+        return 14f * density;
     }
 
     private final Context ctx;
     private final TileListener listener;
     private final int dockSize;
-    /** Dock order (config.xml dock_apps, or a theme's config.json). */
     private final List<String> favourites;
-    /** Never shown as tiles (res/values/config.xml, hidden_apps). */
     private final Set<String> hidden;
     private final boolean animations;
     private final boolean advancedEffects;
     private final boolean showHomeSettings;
-    /** Calmer motion for weak GPUs (config.xml, reduced_motion): no overshoot, shorter fades. */
     private final boolean reducedMotion;
-    private final List<Entry> items = new ArrayList<>();
+    private final List<Category> categories = new ArrayList<>();
+    private final RecyclerView.RecycledViewPool sharedPool = new RecyclerView.RecycledViewPool();
 
-    AppAdapter(Context ctx, TileListener listener, int dockSize, Config cfg) {
+    public AppAdapter(Context ctx, TileListener listener, int dockSize, Config cfg) {
         this.ctx = ctx;
         this.listener = listener;
         this.dockSize = dockSize;
@@ -155,21 +110,101 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         this.advancedEffects = cfg.animations && cfg.advancedEffects;
         this.showHomeSettings = cfg.showHomeSettingsShortcut;
         this.reducedMotion = cfg.reducedMotion;
-        // Tiles keep their identity across reload(), so a focused tile stays on its app instead of
-        // its view being rebound to whatever app now sits in that slot.
         setHasStableIds(true);
     }
 
-    /**
-     * Rebuilds the tiles. A shown module card stands in for every tile of its package (same component,
-     * so focus follows it); hidden_apps wins over a card, and a card's package in dock_apps takes that slot.
-     */
+    @Override
+    public long getItemId(int position) {
+        return categories.get(position).id.hashCode();
+    }
+
+    @Override
+    public int getItemCount() {
+        return categories.size();
+    }
+
+    @NonNull
+    @Override
+    public CategoryHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+        View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_category_row, parent, false);
+        return new CategoryHolder(v);
+    }
+
+    @Override
+    public void onBindViewHolder(@NonNull CategoryHolder holder, int position) {
+        Category cat = categories.get(position);
+        holder.title.setText(cat.title);
+
+        LinearLayoutManager lm = new LinearLayoutManager(ctx, LinearLayoutManager.HORIZONTAL, false);
+        holder.recycler.setLayoutManager(lm);
+        holder.recycler.setRecycledViewPool(sharedPool);
+        holder.recycler.setHasFixedSize(true);
+        HorizontalAppAdapter appAdapter = new HorizontalAppAdapter(ctx, cat.apps, position, listener,
+                animations, advancedEffects, reducedMotion);
+        holder.recycler.setAdapter(appAdapter);
+
+        holder.recycler.clearOnScrollListeners();
+        holder.recycler.addOnScrollListener(new RecyclerView.OnScrollListener() {
+            @Override
+            public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
+                if (listener != null) {
+                    listener.onRowScrolled(dx);
+                }
+            }
+        });
+    }
+
+    public float focusScale() {
+        return FOCUS_SCALE;
+    }
+
+    public List<Category> getCategories() {
+        return categories;
+    }
+
+    public int[] findAppPosition(String key) {
+        if (key == null) return null;
+        for (int r = 0; r < categories.size(); r++) {
+            List<Entry> apps = categories.get(r).apps;
+            for (int c = 0; c < apps.size(); c++) {
+                Entry e = apps.get(c);
+                String k = e.component != null ? e.component.flattenToShortString() : e.pkg;
+                if (key.equals(k)) {
+                    return new int[]{r, c};
+                }
+            }
+        }
+        return null;
+    }
+
+    public String keyAt(int row, int col) {
+        if (row >= 0 && row < categories.size()) {
+            List<Entry> apps = categories.get(row).apps;
+            if (col >= 0 && col < apps.size()) {
+                Entry e = apps.get(col);
+                return e.component != null ? e.component.flattenToShortString() : e.pkg;
+            }
+        }
+        return null;
+    }
+
+    public Entry entryAt(int row, int col) {
+        if (row >= 0 && row < categories.size()) {
+            List<Entry> apps = categories.get(row).apps;
+            if (col >= 0 && col < apps.size()) {
+                return apps.get(col);
+            }
+        }
+        return null;
+    }
+
     void reload(List<Cards.Card> cards) {
         PackageManager pm = ctx.getPackageManager();
         Intent probe = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER);
         List<ResolveInfo> found = pm.queryIntentActivities(probe, 0);
         Map<String, Cards.Card> cardByPkg = new HashMap<>();
         for (Cards.Card c : cards) cardByPkg.put(c.pkg, c);
+
         List<Entry> fresh = new ArrayList<>();
         Set<String> seenPkgs = new HashSet<>();
         for (ResolveInfo ri : found) {
@@ -179,19 +214,17 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             seenPkgs.add(pkg);
             ComponentName component = new ComponentName(pkg, ri.activityInfo.name);
             Cards.Card card = cardByPkg.get(pkg);
-            if (card != null && !card.component.equals(component)) continue;   // the card stands in for this tile
+            if (card != null && !card.component.equals(component)) continue;
             Drawable banner = loadBanner(pm, ri);
             Drawable icon = ri.loadIcon(pm);
             if (card != null) {
                 fresh.add(new Entry(Entry.CARD, card.label, component, banner, icon, card.caption, card.accent, true));
             } else {
-                // Same cleaner as the card prompt: an app label with a bidi override or line separator must not
-                // redraw the tile name as something else (#117).
                 fresh.add(new Entry(Cards.cleanLabel(String.valueOf(ri.loadLabel(pm)), pkg), component, banner, icon, true));
             }
         }
 
-        // TV Box support: discover standard mobile/tablet apps that don't declare LEANBACK_LAUNCHER
+        // TV Box support: discover standard mobile apps that don't declare LEANBACK_LAUNCHER
         Intent standardProbe = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
         List<ResolveInfo> standardApps = pm.queryIntentActivities(standardProbe, 0);
         for (ResolveInfo ri : standardApps) {
@@ -204,15 +237,13 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             Drawable icon = ri.loadIcon(pm);
             fresh.add(new Entry(Cards.cleanLabel(String.valueOf(ri.loadLabel(pm)), pkg), component, banner, icon, false));
         }
-        // Group into Dock Favorites and categorized rows
+
+        // 1. Group Dock Favorites
         List<Entry> dockList = new ArrayList<>();
-        List<Entry> remaining = new ArrayList<>();
         Set<String> dockPkgs = new HashSet<>(favourites);
         for (Entry e : fresh) {
             if (dockPkgs.contains(e.pkg)) {
                 dockList.add(e);
-            } else {
-                remaining.add(e);
             }
         }
         Collections.sort(dockList, (a, b) -> {
@@ -220,12 +251,13 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             return Integer.compare(fa, fb);
         });
 
+        // 2. Group Categories
         List<Entry> streaming = new ArrayList<>();
         List<Entry> games = new ArrayList<>();
         List<Entry> tools = new ArrayList<>();
         List<Entry> system = new ArrayList<>();
 
-        for (Entry e : remaining) {
+        for (Entry e : fresh) {
             int cat = detectCategory(e.pkg, e.label);
             if (cat == 1) streaming.add(e);
             else if (cat == 2) games.add(e);
@@ -238,31 +270,29 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         Collections.sort(tools, (a, b) -> a.label.compareToIgnoreCase(b.label));
         Collections.sort(system, (a, b) -> a.label.compareToIgnoreCase(b.label));
 
-        List<Entry> organized = new ArrayList<>(dockList);
+        if (showHomeSettings && pm.resolveActivity(new Intent(Settings.ACTION_HOME_SETTINGS), 0) != null) {
+            system.add(new Entry(Entry.HOME_SETTINGS, ctx.getString(R.string.home_settings),
+                    new ComponentName(ctx, HomeSettingsActivity.class), null,
+                    ctx.getDrawable(R.drawable.ic_home_settings), null, 0, false));
+        }
+
+        categories.clear();
+        if (!dockList.isEmpty()) {
+            categories.add(new Category("favorites", ctx.getString(R.string.category_favorites), dockList));
+        }
         if (!streaming.isEmpty()) {
-            organized.add(Entry.header(ctx.getString(R.string.category_streaming)));
-            organized.addAll(streaming);
+            categories.add(new Category("streaming", ctx.getString(R.string.category_streaming), streaming));
         }
         if (!games.isEmpty()) {
-            organized.add(Entry.header(ctx.getString(R.string.category_games)));
-            organized.addAll(games);
+            categories.add(new Category("games", ctx.getString(R.string.category_games), games));
         }
         if (!tools.isEmpty()) {
-            organized.add(Entry.header(ctx.getString(R.string.category_tools)));
-            organized.addAll(tools);
+            categories.add(new Category("tools", ctx.getString(R.string.category_tools), tools));
         }
         if (!system.isEmpty()) {
-            organized.add(Entry.header(ctx.getString(R.string.category_system)));
-            organized.addAll(system);
+            categories.add(new Category("system", ctx.getString(R.string.category_system), system));
         }
-        if (showHomeSettings
-                && pm.resolveActivity(new Intent(Settings.ACTION_HOME_SETTINGS), 0) != null) {
-            organized.add(new Entry(Entry.HOME_SETTINGS, ctx.getString(R.string.home_settings),
-                    new ComponentName(ctx, HomeSettingsActivity.class), null,
-                    ctx.getDrawable(R.drawable.ic_home_settings), null, 0));
-        }
-        items.clear();
-        items.addAll(organized);
+
         notifyDataSetChanged();
     }
 
@@ -275,7 +305,9 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 || p.contains("player") || p.contains("tv") || p.contains("video") || p.contains("cinema")
                 || p.contains("movie") || p.contains("disney") || p.contains("max") || p.contains("hbo")
                 || p.contains("star") || p.contains("directv") || p.contains("plex") || p.contains("pluto")
-                || p.contains("crunchyroll") || p.contains("twitch")) {
+                || p.contains("crunchyroll") || p.contains("twitch") || p.contains("videomanager")
+                || p.contains("dgplayer") || p.contains("earthcam") || p.contains("webvideo")
+                || p.contains("fczx") || p.contains("zapptv")) {
             return 1;
         }
         // 2. Juegos y Emuladores
@@ -291,21 +323,13 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 || p.contains("archiver") || p.contains("aptoide") || p.contains("airscreen") || p.contains("cast")
                 || p.contains("browser") || p.contains("chrome") || p.contains("sbrowser") || p.contains("navegador")
                 || p.contains("telegram") || p.contains("speedtest") || p.contains("cleaner") || p.contains("remote")
-                || p.contains("drive") || p.contains("happymod") || p.contains("bluetooth") || p.contains("poison")
-                || p.contains("kingred") || p.contains("netxxus") || p.contains("titan")) {
+                || p.contains("drive") || p.contains("dubox") || p.contains("happymod") || p.contains("bluetooth")
+                || p.contains("poison") || p.contains("kingred") || p.contains("netxxus") || p.contains("titan")
+                || p.contains("hydra")) {
             return 3;
         }
         // 4. Sistema
         return 4;
-    }
-
-    public boolean isHeader(int position) {
-        return position >= 0 && position < items.size() && items.get(position).kind == Entry.HEADER;
-    }
-
-    @Override
-    public int getItemViewType(int position) {
-        return isHeader(position) ? Entry.HEADER : Entry.APP;
     }
 
     private Drawable loadBanner(PackageManager pm, ResolveInfo ri) {
@@ -314,7 +338,6 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if (id != 0) {
             try {
                 Resources resources = pm.getResourcesForApplication(ri.activityInfo.applicationInfo);
-                // Keep at least xhdpi detail rather than downsampling artwork before the focus zoom.
                 int density = Math.max(DisplayMetrics.DENSITY_XHIGH, ctx.getResources().getDisplayMetrics().densityDpi);
                 return resources.getDrawableForDensity(id, density, null);
             } catch (PackageManager.NameNotFoundException | Resources.NotFoundException ignored) {
@@ -323,164 +346,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         return ri.activityInfo.loadBanner(pm);
     }
 
-    @NonNull
-    @Override
-    public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-        if (viewType == Entry.HEADER) {
-            View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_section_header, parent, false);
-            return new HeaderHolder(v);
-        }
-        View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_app, parent, false);
-        float density = parent.getResources().getDisplayMetrics().density;
-        int width = parent.getWidth() > 0 ? parent.getWidth() : parent.getMeasuredWidth();
-        int inner = width - parent.getPaddingLeft() - parent.getPaddingRight();
-        int w = tileWidthPx(inner, dockSize, density), h = tileHeightPx(w);
-        View card = v.findViewById(R.id.card);
-        ViewGroup.LayoutParams cardLp = card.getLayoutParams();
-        cardLp.width = w;
-        cardLp.height = h;
-        card.setLayoutParams(cardLp);
-        View name = v.findViewById(R.id.name);
-        ViewGroup.MarginLayoutParams nameLp = (ViewGroup.MarginLayoutParams) name.getLayoutParams();
-        nameLp.width = w;
-        nameLp.topMargin = h + Math.round(7 * density);
-        name.setLayoutParams(nameLp);
-        return new Holder(v, listener, animations, advancedEffects, reducedMotion);
-    }
-
-    @Override
-    public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) {
-        Entry e = items.get(position);
-        if (e.kind == Entry.HEADER) {
-            HeaderHolder hh = (HeaderHolder) holder;
-            hh.title.setText(e.label);
-            return;
-        }
-        Holder h = (Holder) holder;
-        h.name.setText(e.name);
-        h.name.setVisibility(position < dockSize ? View.INVISIBLE : View.VISIBLE);   // the dock has no labels
-        boolean focused = h.card.isFocused();   // a rebind after reload() can hit the focused tile
-        h.name.setAlpha(focused ? 1f : 0f);
-        h.card.setScaleX(focused && animations ? focusScale() : 1f);
-        h.card.setScaleY(focused && animations ? focusScale() : 1f);
-        h.card.setTranslationY(focused && advancedEffects ? -4f * ctx.getResources().getDisplayMetrics().density : 0f);
-        h.card.setTranslationZ(focused && advancedEffects ? 8f * ctx.getResources().getDisplayMetrics().density : 0f);
-        h.banner.setScaleX(focused && advancedEffects ? 1.035f : 1f);
-        h.banner.setScaleY(focused && advancedEffects ? 1.035f : 1f);
-        if (e.banner != null) {
-            h.banner.setImageDrawable(e.banner);
-            h.banner.setVisibility(View.VISIBLE);
-            h.icon.setVisibility(View.GONE);
-            h.label.setVisibility(View.GONE);
-        } else {
-            h.banner.setImageDrawable(null);
-            h.banner.setVisibility(View.GONE);
-            h.icon.setImageDrawable(e.icon);
-            h.icon.setVisibility(View.VISIBLE);
-            h.label.setText(e.label);
-            h.label.setVisibility(View.VISIBLE);
-        }
-        h.card.setOnClickListener(v -> launch(e));
-        h.card.setOnLongClickListener(v -> {
-            Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + e.pkg));
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            try {
-                ctx.startActivity(i);
-            } catch (ActivityNotFoundException ignored) {
-            }
-            return true;
-        });
-    }
-
-    /** Opens the tile's activity by explicit component, with no extras: a card can name nothing else. */
-    private void launch(Entry e) {
-        if (e.kind == Entry.HOME_SETTINGS) {
-            ctx.startActivity(new Intent(ctx, HomeSettingsActivity.class)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-            return;
-        }
-        Intent i;
-        if (e.isLeanback) {
-            i = new Intent(Intent.ACTION_MAIN)
-                    .addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
-                    .setComponent(e.component);
-        } else {
-            i = ctx.getPackageManager().getLaunchIntentForPackage(e.pkg);
-            if (i == null) {
-                i = new Intent(Intent.ACTION_MAIN)
-                        .addCategory(Intent.CATEGORY_LAUNCHER)
-                        .setComponent(e.component);
-            }
-        }
-        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-        try {
-            ctx.startActivity(i);
-            if (advancedEffects && ctx instanceof Activity) {
-                ((Activity) ctx).overridePendingTransition(R.anim.app_open_enter, R.anim.app_open_exit);
-            }
-        } catch (Exception ex) {
-            try {
-                Intent fallback = ctx.getPackageManager().getLaunchIntentForPackage(e.pkg);
-                if (fallback != null) {
-                    fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    ctx.startActivity(fallback);
-                    return;
-                }
-            } catch (Exception ignored) {
-            }
-            Toast.makeText(ctx, ctx.getString(R.string.cant_open, e.label), Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    @Override
-    public int getItemCount() {
-        return items.size();
-    }
-
-    @Override
-    public long getItemId(int position) {
-        Entry e = items.get(position);
-        if (e.component != null) return e.component.flattenToShortString().hashCode();
-        return ("header:" + e.label).hashCode();
-    }
-
-    /** Stable key for the app at a position (its component), or null. */
-    String keyAt(int position) {
-        if (position < 0 || position >= items.size()) return null;
-        Entry e = items.get(position);
-        return e.component != null ? e.component.flattenToShortString() : null;
-    }
-
-    /** Position of the app with this key, or -1 when it is gone. */
-    int positionOf(String key) {
-        if (key == null) return -1;
-        for (int i = 0; i < items.size(); i++) {
-            Entry e = items.get(i);
-            if (e.component != null && e.component.flattenToShortString().equals(key)) return i;
-        }
-        return -1;
-    }
-
-    String labelAt(int position) {
-        return position >= 0 && position < items.size() ? items.get(position).label : "";
-    }
-
-    float focusScale() {
-        return !animations ? 1f : advancedEffects ? 1.12f : 1.10f;
-    }
-
-    /** A vivid colour sampled from the app's banner (or icon), cached per entry; a card's accent when it set one. */
-    int ambientColorAt(int position) {
-        if (position < 0 || position >= items.size()) return 0xFF444444;
-        Entry e = items.get(position);
-        if (e.kind == Entry.HEADER) return 0xFF444444;
-        if (e.ambient == 0) e.ambient = vividColor(e.banner != null ? e.banner : e.icon);
-        return e.ambient;
-    }
-
-    private static int vividColor(Drawable live) {
+    public static int sampleBannerColor(Drawable live) {
         if (live == null) return 0xFF444444;
-        // Draw a private copy: changing the bounds of the drawable an ImageView shows would blank the tile.
         Drawable d = live.getConstantState() != null ? live.getConstantState().newDrawable().mutate() : live;
         Rect saved = new Rect(d.getBounds());
         int n = 12;
@@ -500,7 +367,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 g += Color.green(p);
                 b += Color.blue(p);
                 Color.colorToHSV(p, hsv);
-                float score = hsv[1] * Math.min(1f, hsv[2] * 1.4f);   // saturated and not too dark
+                float score = hsv[1] * Math.min(1f, hsv[2] * 1.4f);
                 if (score > bestScore) {
                     bestScore = score;
                     best = p;
@@ -508,7 +375,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             }
         }
         bmp.recycle();
-        if (bestScore < 0.25f) {   // nearly monochrome banner (e.g. white): use its average, lifted
+        if (bestScore < 0.25f) {
             int avg = Color.rgb((int) (r / (n * n)), (int) (g / (n * n)), (int) (b / (n * n)));
             Color.colorToHSV(avg, hsv);
             hsv[2] = Math.max(hsv[2], 0.55f);
@@ -520,94 +387,14 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         return Color.HSVToColor(hsv);
     }
 
-    /** Corner radius for a tile of this width: 16dp at the design width, proportionally less when smaller. */
-    static float cornerRadius(int tileWidthPx, float density) {
-        return 16f * density * Math.min(1f, tileWidthPx / (DESIGN_W_DP * density));
-    }
+    public static final class CategoryHolder extends RecyclerView.ViewHolder {
+        public final TextView title;
+        public final RecyclerView recycler;
 
-    static final class Holder extends RecyclerView.ViewHolder {
-        final View card;
-        final ImageView banner;
-        final ImageView icon;
-        final TextView label;
-        final TextView name;
-        final boolean animations;
-        final boolean advancedEffects;
-        final boolean reducedMotion;
-
-        Holder(View v, TileListener listener, boolean animations, boolean advancedEffects,
-               boolean reducedMotion) {
+        public CategoryHolder(View v) {
             super(v);
-            card = v.findViewById(R.id.card);
-            banner = v.findViewById(R.id.banner);
-            icon = v.findViewById(R.id.icon);
-            label = v.findViewById(R.id.label);
-            name = v.findViewById(R.id.name);
-            this.animations = animations;
-            this.advancedEffects = advancedEffects;
-            this.reducedMotion = reducedMotion;
-
-            final float density = v.getResources().getDisplayMetrics().density;
-            card.setOutlineProvider(new ViewOutlineProvider() {
-                @Override
-                public void getOutline(View view, Outline outline) {
-                    // 16dp at the design width, scaled down with the tile so small tiles keep the same shape.
-                    outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), cornerRadius(view.getWidth(), density));
-                }
-            });
-            card.setClipToOutline(true);
-
-            card.setOnKeyListener((view, keyCode, event) -> {
-                if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
-                if (keyCode != KeyEvent.KEYCODE_DPAD_UP && keyCode != KeyEvent.KEYCODE_DPAD_DOWN
-                        && keyCode != KeyEvent.KEYCODE_DPAD_LEFT && keyCode != KeyEvent.KEYCODE_DPAD_RIGHT) return false;
-                int pos = getBindingAdapterPosition();
-                return listener != null && pos != RecyclerView.NO_POSITION && listener.onTileVerticalKey(pos, keyCode);
-            });
-
-            card.setOnFocusChangeListener((view, focused) -> {
-                view.animate().cancel();
-                banner.animate().cancel();
-                name.animate().cancel();
-                float scale = !animations ? 1f : advancedEffects ? 1.12f : 1.10f;
-                float s = focused ? scale : 1f;
-                if (!animations) {
-                    view.setScaleX(1f);
-                    view.setScaleY(1f);
-                    view.setTranslationY(0f);
-                    view.setTranslationZ(0f);
-                    banner.setScaleX(1f);
-                    banner.setScaleY(1f);
-                    name.setAlpha(focused ? 1f : 0f);
-                    name.setTranslationY(0f);
-                } else if (reducedMotion) {
-                    view.animate().scaleX(s).scaleY(s)
-                            .translationY(focused && advancedEffects ? -4f * density : 0f)
-                            .translationZ(focused && advancedEffects ? 8f * density : 0f)
-                            .setDuration(focused ? 120 : 80)
-                            .setInterpolator(new DecelerateInterpolator())
-                            .withLayer().start();
-                    name.animate().alpha(focused ? 1f : 0f).setDuration(100).start();
-                } else {
-                    view.animate().scaleX(s).scaleY(s)
-                            .translationY(focused && advancedEffects ? -4f * density : 0f)
-                            .translationZ(focused && advancedEffects ? 8f * density : 0f)
-                            .setDuration(advancedEffects ? (focused ? 220 : 170) : (focused ? 260 : 180))
-                            .setInterpolator(new OvershootInterpolator(focused ? (advancedEffects ? 0.7f : 1.6f) : 0f))
-                            .withLayer().start();
-                    if (advancedEffects) {
-                        banner.animate().scaleX(focused ? 1.035f : 1f).scaleY(focused ? 1.035f : 1f)
-                                .setDuration(280).start();
-                    }
-                    name.animate().alpha(focused ? 1f : 0f)
-                            .translationY(focused ? density * 4f : -density * 6f)
-                            .setDuration(220).start();
-                }
-                int pos = getBindingAdapterPosition();
-                if (focused && listener != null && pos != RecyclerView.NO_POSITION) {
-                    listener.onTileFocused(pos, view);
-                }
-            });
+            title = v.findViewById(R.id.categoryTitle);
+            recycler = v.findViewById(R.id.categoryRecycler);
         }
     }
 }

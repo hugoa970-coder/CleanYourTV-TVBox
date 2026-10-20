@@ -58,8 +58,9 @@
     <string name="card_state_new">New</string>
     <string name="card_state_new_key">New key</string>
     <string name="card_state_new_label">New name</string>
-    <string name="category_streaming">Películas y Series</string>
-    <string name="category_games">Juegos y Emuladores</string>
-    <string name="category_tools">Herramientas y Utilidades</string>
-    <string name="category_system">Sistema</string>
+    <string name="category_favorites">Favorites</string>
+    <string name="category_streaming">Movies &amp; Series</string>
+    <string name="category_games">Games &amp; Emulators</string>
+    <string name="category_tools">Tools &amp; Utilities</string>
+    <string name="category_system">System</string>
 </resources>
