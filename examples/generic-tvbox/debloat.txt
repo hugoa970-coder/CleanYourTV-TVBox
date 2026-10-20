@@ -1,0 +1,26 @@
+# Perfil de Debloat para TV Box (Amlogic, Rockchip, Allwinner y genéricas)
+#
+# Uso con el instalador:
+#   .\tools\disable.ps1 examples\generic-tvbox\debloat.txt
+#
+# Cada paquete listado aqui es DESHABILITADO con `pm disable-user`, nunca eliminado.
+# Puedes volver a habilitar cualquier paquete en cualquier momento.
+
+# --- Telemetría y rastreo publicitario genérico ---
+tv.alphonso.alphonso_eula
+com.google.android.feedback
+com.google.android.tv.bugreportsender
+com.adups.fota
+com.adups.fota.sysoper
+
+# --- Recomendaciones, tiendas chinas y anuncios integrados ---
+com.google.android.tvrecommendations
+com.rockchip.mediaboxlauncher.recommend
+com.allwinner.recommend
+
+# --- Servicios de actualización invasivos (re-habilitar si deseas actualizar firmware) ---
+# com.adups.fota
+
+# --- Asistentes de voz o servicios innecesarios en TV Box sin micrófono ---
+# com.google.android.katniss
+# com.google.android.speech.pumpkin
